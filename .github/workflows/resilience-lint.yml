@@ -1,0 +1,34 @@
+# Offline resilience, egress and alert rule checks on every push and pull request.
+# No cluster needed. In your own repository, replace the test step with the
+# set of manifests you apply together, e.g.:
+#   bash ci/resilience-lint.sh deploy/payments/
+name: resilience-lint
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  resilience-lint:
+    runs-on: ubuntu-24.04
+    steps:
+      # actions/checkout v7.0.1, pinned to the commit SHA of the tag
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Pinned istioctl, kubectl, yq and promtool into ./bin
+        run: bash tools/install-cli.sh
+      - name: resilience-lint test suite (working scenarios pass, silent errors fail)
+        run: bash ci/test-resilience-lint.sh
+      - name: resilience-lint on the sidecar lab set
+        run: >-
+          bash ci/resilience-lint.sh apps/payments-sidecar.yaml
+          retries/ circuit-breaking/connection-pool.yaml
+          fault-injection/risk-score-abort.yaml egress/serviceentry-github.yaml
+      - name: Alert rules on response flags (promtool check + unit tests + mutants)
+        run: bash ci/test-alerts.sh
+      - name: Context guard (lab scripts refuse any context that is not a local kind cluster)
+        run: bash ci/test-context-guard.sh

@@ -1,0 +1,20 @@
+# Fault one hop below the policy under test: fraud-check's calls to
+# risk-score take 3 extra seconds. The perTryTimeout and timeout of
+# payments-api -> fraud-check are what is being tested.
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: risk-score
+  namespace: payments
+spec:
+  hosts:
+  - risk-score
+  http:
+  - fault:
+      delay:
+        fixedDelay: 3s
+        percentage:
+          value: 100
+    route:
+    - destination:
+        host: risk-score

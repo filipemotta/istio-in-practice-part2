@@ -1,0 +1,17 @@
+# Silent error: a mesh timeout looser than the application's own timeout.
+# payments-api gives up after 2s (its HTTP client); this 5s route timeout
+# never fires. The more restrictive of the two wins, so this line does
+# nothing except look like a protection in code review.
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: fraud-check
+  namespace: payments
+spec:
+  hosts:
+  - fraud-check
+  http:
+  - timeout: 5s
+    route:
+    - destination:
+        host: fraud-check

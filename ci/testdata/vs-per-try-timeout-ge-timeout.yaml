@@ -1,0 +1,19 @@
+# Test fixture for ci/resilience-lint.sh: perTryTimeout equal to the route
+# timeout, so a slow first try consumes the whole budget and no retry starts.
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: fraud-check
+  namespace: payments
+spec:
+  hosts:
+  - fraud-check
+  http:
+  - timeout: 1s
+    retries:
+      attempts: 2
+      perTryTimeout: 1000ms
+      retryOn: gateway-error,connect-failure,refused-stream
+    route:
+    - destination:
+        host: fraud-check

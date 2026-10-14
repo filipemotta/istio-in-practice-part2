@@ -1,0 +1,18 @@
+# Silent error: a ServiceEntry with resolution NONE. The proxy forwards to
+# whatever IP the application dialed, as long as the SNI/Host says
+# api.github.com. A client that resolves the name itself (or is told to) can
+# reach any IP on port 443 and it is still logged as api.github.com.
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: github-api
+  namespace: payments
+spec:
+  hosts:
+  - api.github.com
+  ports:
+  - number: 443
+    name: tls
+    protocol: TLS
+  location: MESH_EXTERNAL
+  resolution: NONE

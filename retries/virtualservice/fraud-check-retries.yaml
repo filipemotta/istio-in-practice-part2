@@ -1,0 +1,22 @@
+# Istio API: the time budget of payments-api -> fraud-check, written down.
+# At most 3 tries (1 + 2 retries), each cut at 500ms, all of them inside a
+# 2 second total. Retry only what is safe to retry: 502/503/504 and
+# connection failures, never every 5xx. The Gateway API equivalent (HTTPRoute
+# retry) is experimental in v1.6 and is not in the standard CRDs.
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: fraud-check
+  namespace: payments
+spec:
+  hosts:
+  - fraud-check
+  http:
+  - timeout: 2s
+    retries:
+      attempts: 2
+      perTryTimeout: 500ms
+      retryOn: gateway-error,connect-failure,refused-stream
+    route:
+    - destination:
+        host: fraud-check

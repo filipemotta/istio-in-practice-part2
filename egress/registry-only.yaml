@@ -1,0 +1,11 @@
+# Overlay for istio/install.yaml: block every outbound host that is not in the
+# mesh registry (a Kubernetes Service or a ServiceEntry).
+# Apply with: istioctl install -y -f istio/install.yaml -f egress/registry-only.yaml
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+metadata:
+  name: istio
+spec:
+  meshConfig:
+    outboundTrafficPolicy:
+      mode: REGISTRY_ONLY

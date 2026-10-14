@@ -1,0 +1,30 @@
+# Alert drill (step 5): two routing mistakes that fail every request they
+# touch, so the NR and NC alerts of observability/alerts.yaml have something
+# to fire on. Apply only with circuit-breaking/connection-pool.yaml, in the lab.
+# - /v2 routes to subset v2, which no DestinationRule defines: 503 NC
+#   (cluster not found).
+# - Only /v2 and /api have a rule, and there is no catch-all: any other path
+#   gets 404 NR (route not found).
+# - /api is the working route, used to overload the connection pool (503 UO).
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: fraud-check
+  namespace: payments
+spec:
+  hosts:
+  - fraud-check
+  http:
+  - match:
+    - uri:
+        prefix: /v2
+    route:
+    - destination:
+        host: fraud-check
+        subset: v2
+  - match:
+    - uri:
+        prefix: /api
+    route:
+    - destination:
+        host: fraud-check

@@ -1,0 +1,21 @@
+# Ambient: retries need the Istio API (HTTPRoute retry is experimental in
+# Gateway API v1.6), and VirtualService on waypoints is Alpha in Istio 1.31.
+# Do not attach an HTTPRoute and a VirtualService to the same Service: mixing
+# them on a waypoint is undefined behavior.
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: fraud-check
+  namespace: payments-ambient
+spec:
+  hosts:
+  - fraud-check
+  http:
+  - timeout: 2s
+    retries:
+      attempts: 2
+      perTryTimeout: 500ms
+      retryOn: gateway-error,connect-failure,refused-stream
+    route:
+    - destination:
+        host: fraud-check

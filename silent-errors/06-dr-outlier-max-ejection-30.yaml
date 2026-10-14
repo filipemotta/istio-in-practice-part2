@@ -1,0 +1,16 @@
+# Silent error: a maxEjectionPercent that looks generous and still ejects
+# nothing with 3 endpoints. Envoy compares (ejected + 1) / endpoints = 33%
+# with the limit; 30 < 33, so the broken endpoint stays in the pool.
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: fraud-check
+  namespace: payments
+spec:
+  host: fraud-check
+  trafficPolicy:
+    outlierDetection:
+      consecutive5xxErrors: 3
+      interval: 5s
+      baseEjectionTime: 2m
+      maxEjectionPercent: 30

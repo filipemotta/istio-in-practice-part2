@@ -1,0 +1,38 @@
+# A second caller of fraud-check whose sidecar keeps Istio's default stats
+# inclusion list. The proxy.istio.io/config annotation replaces the mesh-wide
+# proxyStatsMatcher of istio/install.yaml with empty lists (the injector merges
+# the annotation over meshConfig.defaultConfig, and a list in the annotation
+# replaces the mesh one). Step 4 sends it the same overflow and the same
+# broken replica as payments-api, then compares the Envoy counters of the two
+# sidecars: what exists without proxyStatsMatcher, and what does not.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stats-probe
+  namespace: payments
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: stats-probe
+  template:
+    metadata:
+      labels:
+        app: stats-probe
+        version: v1
+      annotations:
+        proxy.istio.io/config: |
+          proxyStatsMatcher:
+            inclusionPrefixes: []
+            inclusionSuffixes: []
+            inclusionRegexps: []
+    spec:
+      containers:
+      - name: load
+        image: fortio/fortio:1.75.3
+        # Kept running so "fortio load" can be exec'd into it; its UI is not used.
+        args: ["server", "-http-port", "9080", "-grpc-port", "disabled", "-redirect-port", "disabled", "-tcp-port", "disabled", "-udp-port", "disabled"]
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi

@@ -1,0 +1,15 @@
+# Silent error: outlier detection that never ejects. maxEjectionPercent is
+# omitted, so it is 10%. With 3 fraud-check endpoints a single ejection is
+# 33% > 10%: Envoy skips it and counts outlier_detection.ejections_overflow.
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: fraud-check
+  namespace: payments
+spec:
+  host: fraud-check
+  trafficPolicy:
+    outlierDetection:
+      consecutive5xxErrors: 3
+      interval: 5s
+      baseEjectionTime: 2m

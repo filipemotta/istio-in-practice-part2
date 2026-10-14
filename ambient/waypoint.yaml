@@ -1,0 +1,18 @@
+# Waypoint for the payments-ambient namespace: an Envoy deployment managed by
+# istiod that applies the L7 policies (timeouts, retries, connection pool,
+# outlier detection) for the Services that opt in with the label
+# istio.io/use-waypoint=waypoint. Same output as
+# `istioctl waypoint generate -n payments-ambient --for service`.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  labels:
+    istio.io/waypoint-for: service
+  name: waypoint
+  namespace: payments-ambient
+spec:
+  gatewayClassName: istio-waypoint
+  listeners:
+  - name: mesh
+    port: 15008
+    protocol: HBONE

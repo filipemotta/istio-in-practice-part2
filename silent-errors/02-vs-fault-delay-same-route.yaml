@@ -1,0 +1,22 @@
+# Silent error: testing a timeout with a delay injected on the same route.
+# The fault filter runs before the router in the caller's proxy, so the 3s
+# delay happens before the 1s route timeout starts counting: the request
+# succeeds after 3s and the test "proves" nothing about the timeout.
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: fraud-check
+  namespace: payments
+spec:
+  hosts:
+  - fraud-check
+  http:
+  - timeout: 1s
+    fault:
+      delay:
+        fixedDelay: 3s
+        percentage:
+          value: 100
+    route:
+    - destination:
+        host: fraud-check

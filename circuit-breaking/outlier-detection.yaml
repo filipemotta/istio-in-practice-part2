@@ -1,0 +1,18 @@
+# Eject a fraud-check endpoint after 3 consecutive 5xx, for 2 minutes the
+# first time. maxEjectionPercent is the field that decides whether anything is
+# ejected at all: Envoy ejects only if (ejected + 1) / endpoints stays within
+# it. With 3 endpoints one ejection is 33%, so the default of 10% (and any
+# value below 34) ejects nothing. Only exists in the Istio API.
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: fraud-check
+  namespace: payments
+spec:
+  host: fraud-check
+  trafficPolicy:
+    outlierDetection:
+      consecutive5xxErrors: 3
+      interval: 5s
+      baseEjectionTime: 2m
+      maxEjectionPercent: 50

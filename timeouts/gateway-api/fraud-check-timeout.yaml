@@ -1,0 +1,20 @@
+# Gateway API (standard channel): the same 1 second budget on a mesh route
+# (parentRef is the fraud-check Service). Istio translates timeouts.request
+# into the route timeout of the caller's proxy.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: fraud-check
+  namespace: payments
+spec:
+  parentRefs:
+  - group: ""
+    kind: Service
+    name: fraud-check
+    port: 8080
+  rules:
+  - timeouts:
+      request: 1s
+    backendRefs:
+    - name: fraud-check
+      port: 8080

@@ -1,0 +1,15 @@
+# Ambient: outlier detection runs in the waypoint, which sees the failures of
+# every client in the namespace. Same maxEjectionPercent arithmetic as sidecars.
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: fraud-check
+  namespace: payments-ambient
+spec:
+  host: fraud-check
+  trafficPolicy:
+    outlierDetection:
+      consecutive5xxErrors: 3
+      interval: 5s
+      baseEjectionTime: 2m
+      maxEjectionPercent: 50

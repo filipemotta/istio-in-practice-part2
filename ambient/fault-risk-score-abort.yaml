@@ -1,0 +1,21 @@
+# Ambient: fault injection exists only in VirtualService (Alpha on waypoints).
+# The waypoint of payments-ambient serves both fraud-check and risk-score, so
+# the retry of payments-api -> fraud-check and the abort of
+# fraud-check -> risk-score run in the same proxy, on different hops.
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: risk-score
+  namespace: payments-ambient
+spec:
+  hosts:
+  - risk-score
+  http:
+  - fault:
+      abort:
+        httpStatus: 503
+        percentage:
+          value: 100
+    route:
+    - destination:
+        host: risk-score

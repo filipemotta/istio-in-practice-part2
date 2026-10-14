@@ -1,0 +1,18 @@
+# Concurrency limit from payments-api's proxy to fraud-check: 2 connections
+# and 1 request waiting for one. Anything beyond that is answered 503 by the
+# caller's own proxy (response flag UO, stat upstream_rq_pending_overflow) and
+# never reaches fraud-check. It protects fraud-check from load; it does not
+# look at whether fraud-check is healthy. Only exists in the Istio API.
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: fraud-check
+  namespace: payments
+spec:
+  host: fraud-check
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 2
+      http:
+        http1MaxPendingRequests: 1

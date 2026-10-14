@@ -1,0 +1,25 @@
+# Silent error: testing retries with an abort injected on the same route.
+# The abort is answered by the caller's own proxy before the router, so the
+# mesh never retries it and nothing reaches fraud-check: 0 attempts.
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: fraud-check
+  namespace: payments
+spec:
+  hosts:
+  - fraud-check
+  http:
+  - timeout: 2s
+    retries:
+      attempts: 2
+      perTryTimeout: 500ms
+      retryOn: gateway-error,connect-failure,refused-stream
+    fault:
+      abort:
+        httpStatus: 503
+        percentage:
+          value: 100
+    route:
+    - destination:
+        host: fraud-check

@@ -1,0 +1,13 @@
+# Mesh-wide tracing to the "jaeger" provider declared in istio/install.yaml.
+# 100% sampling is for the lab only: every retry shows up as a span. The
+# default without this field is 1%.
+apiVersion: telemetry.istio.io/v1
+kind: Telemetry
+metadata:
+  name: mesh-default
+  namespace: istio-system
+spec:
+  tracing:
+  - providers:
+    - name: jaeger
+    randomSamplingPercentage: 100

@@ -1,0 +1,261 @@
+# Unit tests for observability/alerts.yaml.
+# Run: promtool test rules observability/alerts_test.yaml
+# (ci/test-alerts.sh runs it with the promtool pinned by tools/install-cli.sh)
+# Counters are sampled every minute; "0+6x20" is 6 requests per minute (0.1/s).
+rule_files:
+- alerts.yaml
+evaluation_interval: 1m
+
+tests:
+# NR: a sustained stream fires after "for: 5m"; it is only pending before.
+- name: route not found, sustained
+  interval: 1m
+  input_series:
+  - series: 'istio_requests_total{reporter="source", source_workload_namespace="payments", source_workload="payments-api", destination_service="fraud-check:8080", response_code="404", response_flags="NR"}'
+    values: '0+6x20'
+  alert_rule_test:
+  - eval_time: 4m
+    alertname: IstioRouteNotFound
+    exp_alerts: []
+  - eval_time: 7m
+    alertname: IstioRouteNotFound
+    exp_alerts:
+    - exp_labels:
+        severity: critical
+        source_workload_namespace: payments
+        source_workload: payments-api
+        destination_service: fraud-check:8080
+      exp_annotations:
+        summary: "No route for fraud-check:8080 from payments/payments-api (NR, 404)"
+        description: "0.10 req/s answered 404 NR by the proxy: no VirtualService or HTTPRoute rule matches these requests."
+
+# NR: one stray request leaves the 5m window before "for" elapses.
+- name: route not found, single request
+  interval: 1m
+  input_series:
+  - series: 'istio_requests_total{reporter="source", source_workload_namespace="payments", source_workload="payments-api", destination_service="fraud-check:8080", response_code="404", response_flags="NR"}'
+    values: '0 1x20'
+  alert_rule_test:
+  - eval_time: 5m
+    alertname: IstioRouteNotFound
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: IstioRouteNotFound
+    exp_alerts: []
+
+# NR at an Internet-facing edge (scanners hitting unknown paths) does not page.
+- name: route not found at the ingress gateway
+  interval: 1m
+  input_series:
+  - series: 'istio_requests_total{reporter="source", source_workload_namespace="edge", source_workload="payments-edge-istio", destination_service="payments.example.com", response_code="404", response_flags="NR"}'
+    values: '0+30x20'
+  - series: 'istio_requests_total{reporter="source", source_workload_namespace="istio-system", source_workload="istio-ingressgateway", destination_service="payments.example.com", response_code="404", response_flags="NR"}'
+    values: '0+30x20'
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: IstioRouteNotFound
+    exp_alerts: []
+
+# NC: a route to a subset that no DestinationRule defines.
+- name: cluster not found
+  interval: 1m
+  input_series:
+  - series: 'istio_requests_total{reporter="source", source_workload_namespace="payments", source_workload="payments-api", destination_service="fraud-check:8080", response_code="503", response_flags="NC"}'
+    values: '0+6x20'
+  - series: 'istio_requests_total{reporter="source", source_workload_namespace="payments", source_workload="payments-api", destination_service="fraud-check.payments.svc.cluster.local", response_code="200", response_flags="-"}'
+    values: '0+60x20'
+  alert_rule_test:
+  - eval_time: 7m
+    alertname: IstioClusterNotFound
+    exp_alerts:
+    - exp_labels:
+        severity: critical
+        source_workload_namespace: payments
+        source_workload: payments-api
+        destination_service: fraud-check:8080
+      exp_annotations:
+        summary: "Route to a missing cluster for fraud-check:8080 from payments/payments-api (NC, 503)"
+        description: "0.10 req/s answered 503 NC: a route points at a subset or host the proxy does not know (e.g. a subset missing from the DestinationRule)."
+  - eval_time: 7m
+    alertname: IstioRouteNotFound
+    exp_alerts: []
+
+# UO: 10% of the calls rejected by the caller's connectionPool fires; 2% does not.
+- name: upstream overflow above and below 5%
+  interval: 1m
+  input_series:
+  - series: 'istio_requests_total{reporter="source", source_workload_namespace="payments", source_workload="payments-api", destination_service="fraud-check.payments.svc.cluster.local", response_code="200", response_flags="-"}'
+    values: '0+54x20'
+  - series: 'istio_requests_total{reporter="source", source_workload_namespace="payments", source_workload="payments-api", destination_service="fraud-check.payments.svc.cluster.local", response_code="503", response_flags="UO"}'
+    values: '0+6x20'
+  - series: 'istio_requests_total{reporter="source", source_workload_namespace="payments", source_workload="checkout", destination_service="fraud-check.payments.svc.cluster.local", response_code="200", response_flags="-"}'
+    values: '0+98x20'
+  - series: 'istio_requests_total{reporter="source", source_workload_namespace="payments", source_workload="checkout", destination_service="fraud-check.payments.svc.cluster.local", response_code="503", response_flags="UO"}'
+    values: '0+2x20'
+  # The destination never sees a UO request; its 200s must not dilute the ratio.
+  - series: 'istio_requests_total{reporter="destination", source_workload_namespace="payments", source_workload="payments-api", destination_service="fraud-check.payments.svc.cluster.local", response_code="200", response_flags="-"}'
+    values: '0+540x20'
+  alert_rule_test:
+  - eval_time: 3m
+    alertname: IstioUpstreamOverflow
+    exp_alerts: []
+  - eval_time: 7m
+    alertname: IstioUpstreamOverflow
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+        source_workload_namespace: payments
+        source_workload: payments-api
+        destination_service: fraud-check.payments.svc.cluster.local
+      exp_annotations:
+        summary: "connectionPool of fraud-check.payments.svc.cluster.local is rejecting calls from payments/payments-api (UO, 503)"
+        description: "10% of the calls answered 503 UO by the caller's proxy, without reaching the destination."
+
+# UO reported by a waypoint (ambient) counts the same way.
+- name: upstream overflow at a waypoint
+  interval: 1m
+  input_series:
+  - series: 'istio_requests_total{reporter="waypoint", source_workload_namespace="payments-ambient", source_workload="payments-api", destination_service="fraud-check.payments-ambient.svc.cluster.local", response_code="200", response_flags="-"}'
+    values: '0+30x20'
+  - series: 'istio_requests_total{reporter="waypoint", source_workload_namespace="payments-ambient", source_workload="payments-api", destination_service="fraud-check.payments-ambient.svc.cluster.local", response_code="503", response_flags="UO"}'
+    values: '0+30x20'
+  alert_rule_test:
+  - eval_time: 7m
+    alertname: IstioUpstreamOverflow
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+        source_workload_namespace: payments-ambient
+        source_workload: payments-api
+        destination_service: fraud-check.payments-ambient.svc.cluster.local
+      exp_annotations:
+        summary: "connectionPool of fraud-check.payments-ambient.svc.cluster.local is rejecting calls from payments-ambient/payments-api (UO, 503)"
+        description: "50% of the calls answered 503 UO by the caller's proxy, without reaching the destination."
+
+# UT inside a flag list ("URX,UT", per-try timeout) counts as UT and as URX;
+# "for: 10m" holds them pending at 8m.
+- name: per-try timeouts exhaust the retries
+  interval: 1m
+  input_series:
+  - series: 'istio_requests_total{reporter="source", source_workload_namespace="payments", source_workload="payments-api", destination_service="fraud-check.payments.svc.cluster.local", response_code="200", response_flags="-"}'
+    values: '0+48x30'
+  - series: 'istio_requests_total{reporter="source", source_workload_namespace="payments", source_workload="payments-api", destination_service="fraud-check.payments.svc.cluster.local", response_code="504", response_flags="URX,UT"}'
+    values: '0+12x30'
+  alert_rule_test:
+  - eval_time: 8m
+    alertname: IstioUpstreamTimeout
+    exp_alerts: []
+  - eval_time: 12m
+    alertname: IstioUpstreamTimeout
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+        source_workload_namespace: payments
+        source_workload: payments-api
+        destination_service: fraud-check.payments.svc.cluster.local
+      exp_annotations:
+        summary: "Calls to fraud-check.payments.svc.cluster.local from payments/payments-api hit the mesh timeout (UT, 504)"
+        description: "20% of the calls ended in a route or per-try timeout."
+  - eval_time: 12m
+    alertname: IstioRetriesExhausted
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+        source_workload_namespace: payments
+        source_workload: payments-api
+        destination_service: fraud-check.payments.svc.cluster.local
+      exp_annotations:
+        summary: "Retries to fraud-check.payments.svc.cluster.local exhausted for payments/payments-api (URX)"
+        description: "20% of the calls failed after every retry attempt; each of them cost the destination 1 + attempts requests."
+
+# DC: counted on the client side only. DC at the destination is what a caller
+# timeout looks like from the server and must not fire.
+- name: client gives up first
+  interval: 1m
+  input_series:
+  - series: 'istio_requests_total{reporter="source", source_workload_namespace="payments", source_workload="payments-api", destination_service="fraud-check.payments.svc.cluster.local", response_code="200", response_flags="-"}'
+    values: '0+40x30'
+  - series: 'istio_requests_total{reporter="source", source_workload_namespace="payments", source_workload="payments-api", destination_service="fraud-check.payments.svc.cluster.local", response_code="0", response_flags="DC"}'
+    values: '0+10x30'
+  - series: 'istio_requests_total{reporter="source", source_workload_namespace="payments", source_workload="checkout", destination_service="fraud-check.payments.svc.cluster.local", response_code="200", response_flags="-"}'
+    values: '0+40x30'
+  - series: 'istio_requests_total{reporter="destination", source_workload_namespace="payments", source_workload="checkout", destination_service="fraud-check.payments.svc.cluster.local", response_code="0", response_flags="DC"}'
+    values: '0+10x30'
+  alert_rule_test:
+  - eval_time: 18m
+    alertname: IstioClientGaveUpFirst
+    exp_alerts:
+    - exp_labels:
+        severity: info
+        source_workload_namespace: payments
+        source_workload: payments-api
+        destination_service: fraud-check.payments.svc.cluster.local
+      exp_annotations:
+        summary: "payments/payments-api gives up on fraud-check.payments.svc.cluster.local before the mesh does (DC)"
+        description: "20% of the calls were cancelled by the application. Set a route timeout below the application timeout."
+
+# Egress denied by REGISTRY_ONLY: HTTPS shows up as TCP to BlackHoleCluster
+# with UH. It fires IstioEgressBlocked, not IstioNoHealthyUpstream.
+- name: egress blocked by REGISTRY_ONLY
+  interval: 1m
+  input_series:
+  - series: 'istio_tcp_connections_opened_total{reporter="source", source_workload_namespace="payments", source_workload="payments-api", destination_service_name="BlackHoleCluster", response_flags="UH"}'
+    values: '0+3x20'
+  - series: 'istio_requests_total{reporter="source", source_workload_namespace="payments", source_workload="payments-api", destination_service="BlackHoleCluster", destination_service_name="BlackHoleCluster", response_code="502", response_flags="UH"}'
+    values: '0+3x20'
+  alert_rule_test:
+  - eval_time: 7m
+    alertname: IstioEgressBlocked
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+        source_workload_namespace: payments
+        source_workload: payments-api
+      exp_annotations:
+        summary: "payments/payments-api is calling external hosts that REGISTRY_ONLY blocks (BlackHoleCluster)"
+        description: "0.05 connections/s sent to BlackHoleCluster. Add a ServiceEntry for the host, or remove the call."
+  - eval_time: 7m
+    alertname: IstioNoHealthyUpstream
+    exp_alerts: []
+
+# UH inside the mesh: no ready endpoint left for fraud-check.
+- name: no healthy upstream
+  interval: 1m
+  input_series:
+  - series: 'istio_requests_total{reporter="source", source_workload_namespace="payments", source_workload="payments-api", destination_service="fraud-check.payments.svc.cluster.local", destination_service_name="fraud-check", response_code="503", response_flags="UH"}'
+    values: '0+6x20'
+  alert_rule_test:
+  - eval_time: 7m
+    alertname: IstioNoHealthyUpstream
+    exp_alerts:
+    - exp_labels:
+        severity: critical
+        source_workload_namespace: payments
+        source_workload: payments-api
+        destination_service: fraud-check.payments.svc.cluster.local
+      exp_annotations:
+        summary: "No healthy endpoint of fraud-check.payments.svc.cluster.local for payments/payments-api (UH, 503)"
+        description: "0.10 req/s answered 503 UH: no ready endpoint, or every endpoint ejected by outlier detection."
+  - eval_time: 7m
+    alertname: IstioEgressBlocked
+    exp_alerts: []
+
+# Flags that only contain the letters of another flag do not match:
+# "DI" is not DC, "UF" is not UT, "-" is nothing.
+- name: exact flag tokens
+  interval: 1m
+  input_series:
+  - series: 'istio_requests_total{reporter="source", source_workload_namespace="payments", source_workload="payments-api", destination_service="fraud-check.payments.svc.cluster.local", response_code="200", response_flags="DI"}'
+    values: '0+30x30'
+  - series: 'istio_requests_total{reporter="source", source_workload_namespace="payments", source_workload="payments-api", destination_service="fraud-check.payments.svc.cluster.local", response_code="503", response_flags="UF"}'
+    values: '0+30x30'
+  alert_rule_test:
+  - eval_time: 20m
+    alertname: IstioClientGaveUpFirst
+    exp_alerts: []
+  - eval_time: 20m
+    alertname: IstioUpstreamTimeout
+    exp_alerts: []
+  - eval_time: 20m
+    alertname: IstioUpstreamOverflow
+    exp_alerts: []

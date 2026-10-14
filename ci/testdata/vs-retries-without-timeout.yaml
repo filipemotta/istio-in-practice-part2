@@ -1,0 +1,18 @@
+# Test fixture for ci/resilience-lint.sh: retries with no route timeout, so
+# the total time of the 3 tries has no upper bound in the mesh.
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: fraud-check
+  namespace: payments
+spec:
+  hosts:
+  - fraud-check
+  http:
+  - retries:
+      attempts: 2
+      perTryTimeout: 500ms
+      retryOn: gateway-error,connect-failure,refused-stream
+    route:
+    - destination:
+        host: fraud-check

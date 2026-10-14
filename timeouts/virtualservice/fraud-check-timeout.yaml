@@ -1,0 +1,16 @@
+# Istio API: payments-api gives fraud-check at most 1 second. When it expires
+# the caller's proxy answers 504 (response flag UT) and resets the upstream
+# request. The default, with no timeout set, is no timeout at all.
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: fraud-check
+  namespace: payments
+spec:
+  hosts:
+  - fraud-check
+  http:
+  - timeout: 1s
+    route:
+    - destination:
+        host: fraud-check

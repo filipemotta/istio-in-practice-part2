@@ -1,0 +1,36 @@
+# Istio 1.31 control plane with the ambient profile: istiod + istio-cni + ztunnel.
+# The same control plane serves sidecar namespaces (istio-injection=enabled)
+# and ambient namespaces (istio.io/dataplane-mode=ambient).
+# Install with: istioctl install -y -f istio/install.yaml
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+metadata:
+  name: istio
+spec:
+  profile: ambient
+  meshConfig:
+    # Envoy access logs on stdout: the response flags (UT, URX, UO, FI, DI...)
+    # and the PassthroughCluster/BlackHoleCluster entries come from here.
+    accessLogFile: /dev/stdout
+    # The default, written out so the change in egress/ is a one-line diff.
+    outboundTrafficPolicy:
+      mode: ALLOW_ANY
+    # Traces go to the Jaeger collector of samples/addons (OTLP gRPC).
+    enableTracing: true
+    extensionProviders:
+    - name: jaeger
+      opentelemetry:
+        port: 4317
+        service: jaeger-collector.istio-system.svc.cluster.local
+    defaultConfig:
+      tracing: {} # disable legacy MeshConfig tracing options
+      # Istio proxies expose only a subset of Envoy stats by default. These
+      # add the retry, timeout, pending-overflow and outlier detection
+      # counters, so Prometheus and Grafana can show what the policies did.
+      proxyStatsMatcher:
+        inclusionRegexps:
+        - ".*outlier_detection.*"
+        - ".*upstream_rq_retry.*"
+        - ".*upstream_rq_pending.*"
+        inclusionSuffixes:
+        - upstream_rq_timeout

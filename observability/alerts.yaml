@@ -1,0 +1,141 @@
+# Prometheus alerting rules on the Envoy response flags that Istio exports as
+# the response_flags label of its standard metrics. Plain Prometheus rule file
+# format (no operator): scripts/01-cluster.sh loads it into the samples/addons
+# Prometheus as the "alerting_rules.yml" key of the "prometheus" ConfigMap.
+# Unit tests: observability/alerts_test.yaml (promtool test rules).
+#
+# Notes that shaped the expressions:
+# - response_flags can hold several flags joined by commas ("URX,UT",
+#   "DI,DC"). Prometheus anchors regex matchers, so "(.*,)?UT(,.*)?" matches
+#   the UT flag alone or inside a list, and nothing else.
+# - The proxy that takes the decision (route, timeout, retry, connection pool)
+#   is the client side: reporter="source" for a sidecar, reporter="waypoint"
+#   for an ambient namespace with a waypoint. The ratio rules use both.
+# - NR and NC requests never reach a cluster, so their destination_service is
+#   the Host header of the request (e.g. "fraud-check:8080").
+# - Traffic to BlackHoleCluster (an external host denied by REGISTRY_ONLY) is
+#   TCP for HTTPS, so it shows in istio_tcp_connections_opened_total with the
+#   flag UH, not in istio_requests_total.
+groups:
+- name: istio-response-flags
+  rules:
+  # Configuration errors: any sustained rate is a broken route.
+  # NR is scoped to east-west traffic: an Internet-facing ingress gateway
+  # answers scanners with 404 NR all day. Ingress gateways are excluded by
+  # workload name (classic "istio-ingressgateway", and "<name>-istio" for a
+  # Gateway API Gateway with gatewayClassName istio); give the edge its own
+  # threshold if you want to alert there.
+  - alert: IstioRouteNotFound
+    expr: |
+      sum by (source_workload_namespace, source_workload, destination_service) (
+        rate(istio_requests_total{response_flags=~"(.*,)?NR(,.*)?", source_workload!~"istio-ingressgateway.*|.+-istio"}[5m])
+      ) > 0
+    for: 5m
+    labels:
+      severity: critical
+    annotations:
+      summary: "No route for {{ $labels.destination_service }} from {{ $labels.source_workload_namespace }}/{{ $labels.source_workload }} (NR, 404)"
+      description: '{{ printf "%.2f" $value }} req/s answered 404 NR by the proxy: no VirtualService or HTTPRoute rule matches these requests.'
+  - alert: IstioClusterNotFound
+    expr: |
+      sum by (source_workload_namespace, source_workload, destination_service) (
+        rate(istio_requests_total{response_flags=~"(.*,)?NC(,.*)?"}[5m])
+      ) > 0
+    for: 5m
+    labels:
+      severity: critical
+    annotations:
+      summary: "Route to a missing cluster for {{ $labels.destination_service }} from {{ $labels.source_workload_namespace }}/{{ $labels.source_workload }} (NC, 503)"
+      description: '{{ printf "%.2f" $value }} req/s answered 503 NC: a route points at a subset or host the proxy does not know (e.g. a subset missing from the DestinationRule).'
+  - alert: IstioNoHealthyUpstream
+    expr: |
+      sum by (source_workload_namespace, source_workload, destination_service) (
+        rate(istio_requests_total{reporter=~"source|waypoint", response_flags=~"(.*,)?UH(,.*)?", destination_service_name!="BlackHoleCluster"}[5m])
+      ) > 0
+    for: 2m
+    labels:
+      severity: critical
+    annotations:
+      summary: "No healthy endpoint of {{ $labels.destination_service }} for {{ $labels.source_workload_namespace }}/{{ $labels.source_workload }} (UH, 503)"
+      description: '{{ printf "%.2f" $value }} req/s answered 503 UH: no ready endpoint, or every endpoint ejected by outlier detection.'
+  - alert: IstioEgressBlocked
+    expr: |
+      (
+        sum by (source_workload_namespace, source_workload) (
+          rate(istio_tcp_connections_opened_total{reporter="source", destination_service_name="BlackHoleCluster"}[5m])
+        )
+        or
+        sum by (source_workload_namespace, source_workload) (
+          rate(istio_requests_total{reporter="source", destination_service_name="BlackHoleCluster"}[5m])
+        )
+      ) > 0
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "{{ $labels.source_workload_namespace }}/{{ $labels.source_workload }} is calling external hosts that REGISTRY_ONLY blocks (BlackHoleCluster)"
+      description: '{{ printf "%.2f" $value }} connections/s sent to BlackHoleCluster. Add a ServiceEntry for the host, or remove the call.'
+  # Resilience policies firing: expected in small doses, a problem when sustained.
+  - alert: IstioUpstreamOverflow
+    expr: |
+      sum by (source_workload_namespace, source_workload, destination_service) (
+        rate(istio_requests_total{reporter=~"source|waypoint", response_flags=~"(.*,)?UO(,.*)?"}[5m])
+      )
+      /
+      sum by (source_workload_namespace, source_workload, destination_service) (
+        rate(istio_requests_total{reporter=~"source|waypoint"}[5m])
+      ) > 0.05
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "connectionPool of {{ $labels.destination_service }} is rejecting calls from {{ $labels.source_workload_namespace }}/{{ $labels.source_workload }} (UO, 503)"
+      description: "{{ $value | humanizePercentage }} of the calls answered 503 UO by the caller's proxy, without reaching the destination."
+  - alert: IstioRetriesExhausted
+    expr: |
+      sum by (source_workload_namespace, source_workload, destination_service) (
+        rate(istio_requests_total{reporter=~"source|waypoint", response_flags=~"(.*,)?URX(,.*)?"}[5m])
+      )
+      /
+      sum by (source_workload_namespace, source_workload, destination_service) (
+        rate(istio_requests_total{reporter=~"source|waypoint"}[5m])
+      ) > 0.05
+    for: 10m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Retries to {{ $labels.destination_service }} exhausted for {{ $labels.source_workload_namespace }}/{{ $labels.source_workload }} (URX)"
+      description: "{{ $value | humanizePercentage }} of the calls failed after every retry attempt; each of them cost the destination 1 + attempts requests."
+  - alert: IstioUpstreamTimeout
+    expr: |
+      sum by (source_workload_namespace, source_workload, destination_service) (
+        rate(istio_requests_total{reporter=~"source|waypoint", response_flags=~"(.*,)?UT(,.*)?"}[5m])
+      )
+      /
+      sum by (source_workload_namespace, source_workload, destination_service) (
+        rate(istio_requests_total{reporter=~"source|waypoint"}[5m])
+      ) > 0.05
+    for: 10m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Calls to {{ $labels.destination_service }} from {{ $labels.source_workload_namespace }}/{{ $labels.source_workload }} hit the mesh timeout (UT, 504)"
+      description: "{{ $value | humanizePercentage }} of the calls ended in a route or per-try timeout."
+  # The client hung up before the mesh answered: the mesh timeout is looser
+  # than the application's, or there is none. Only meaningful on the client
+  # side; DC at reporter="destination" is the normal trace of a caller timeout.
+  - alert: IstioClientGaveUpFirst
+    expr: |
+      sum by (source_workload_namespace, source_workload, destination_service) (
+        rate(istio_requests_total{reporter=~"source|waypoint", response_flags=~"(.*,)?DC(,.*)?"}[5m])
+      )
+      /
+      sum by (source_workload_namespace, source_workload, destination_service) (
+        rate(istio_requests_total{reporter=~"source|waypoint"}[5m])
+      ) > 0.05
+    for: 15m
+    labels:
+      severity: info
+    annotations:
+      summary: "{{ $labels.source_workload_namespace }}/{{ $labels.source_workload }} gives up on {{ $labels.destination_service }} before the mesh does (DC)"
+      description: "{{ $value | humanizePercentage }} of the calls were cancelled by the application. Set a route timeout below the application timeout."

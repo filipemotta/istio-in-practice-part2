@@ -1,0 +1,17 @@
+# The one external host payments-api is meant to reach. resolution: DNS makes
+# the proxy resolve api.github.com itself and connect to those addresses,
+# whatever IP the application dialed.
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: github-api
+  namespace: payments
+spec:
+  hosts:
+  - api.github.com
+  ports:
+  - number: 443
+    name: tls
+    protocol: TLS
+  location: MESH_EXTERNAL
+  resolution: DNS
